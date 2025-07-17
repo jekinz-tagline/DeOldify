@@ -15,6 +15,7 @@ from IPython.display import HTML
 from IPython.display import Image as ipythonimage
 import cv2
 import logging
+import threading
 
 # adapted from https://www.pyimagesearch.com/2016/04/25/watermarking-images-with-opencv-and-python/
 def get_watermarked(pil_image: Image) -> Image:
@@ -165,20 +166,65 @@ class ModelImageVisualizer:
         image.save(result_path)
         return result_path
 
+    # def get_transformed_image(
+    #     self, path: Path, render_factor: int = None, post_process: bool = True,
+    #     watermarked: bool = True,
+    # ) -> Image:
+    #     self._clean_mem()
+    #     orig_image = self._open_pil_image(path)
+    #     print(f"Processing image: {path} with render factor: {render_factor}")
+    #     filtered_image = self.filter.filter(
+    #         orig_image, orig_image, render_factor=render_factor,post_process=post_process
+    #     )
+    #     print(f"Image processed: {path}")
+
+    #     if watermarked:
+    #         return get_watermarked(filtered_image)
+
+    #     print(f"Returning filtered image: {path}")
+    #     return filtered_image
+
+    class TimeoutException(Exception):
+        """Raised when the DeOldify filter takes too long."""
+        pass
+
     def get_transformed_image(
         self, path: Path, render_factor: int = None, post_process: bool = True,
         watermarked: bool = True,
     ) -> Image:
         self._clean_mem()
         orig_image = self._open_pil_image(path)
-        filtered_image = self.filter.filter(
-            orig_image, orig_image, render_factor=render_factor,post_process=post_process
-        )
+
+        # ——— threaded filter call starts here ———
+        result_container = []
+
+        def _run_filter():
+            result_container.append(
+                self.filter.filter(
+                    orig_image,
+                    orig_image,
+                    render_factor=render_factor,
+                    post_process=post_process
+                )
+            )
+
+        t = threading.Thread(target=_run_filter)
+        t.daemon = True
+        t.start()
+        t.join(timeout=60)  # wait up to 60 seconds
+
+        if not result_container:
+            raise TimeoutException("DeOldify filter timed out after 60s")
+
+        filtered_image = result_container[0]
+        # ——— threaded filter call ends here ———
 
         if watermarked:
             return get_watermarked(filtered_image)
 
         return filtered_image
+
+
 
     def _plot_image(
         self,
